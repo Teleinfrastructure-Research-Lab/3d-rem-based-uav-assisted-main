@@ -8,20 +8,20 @@ from PerformanceMetricsCalculation import PerformanceMetricsCalculation
 from time import time
 
 import tensorflow as tf
-from utils import radiomap_placement_maxmin_rate, uav_positioning_with_gp, exhaustiveSearch, weightedAverage, generate_3d_grid_encoding, estimateEmpiricalVariogram, FindVariogramParameters, KrigingInterpolation
+from utils import radiomap_placement_maxmin_rate, exhaustiveSearch, weightedAverage, generate_3d_grid_encoding, estimateEmpiricalVariogram, FindVariogramParameters, KrigingInterpolation
 
 
 #%%
 # Experiments:
 # 1. Determine resolution for min UAV channels and min numberOfUEs, and remSamplingRate = 10%
-# 2. Evaluate the remSamplingRate = а{1, 5, 10, 15, 20} %
+# 2. (Maybe, decide later) Evaluate the remSamplingRate = {1, 5, 10, 15, 20} %
 # 3. Evaluate the UAV Location method capacity compared to baselines for the best resolution, 
 # fixed UAV channels, and fixed numberOfUEs
 #Input Parameters
 numberOfMovementIterations = int(100e3)
 numberOfUEs = 10 # For Uniform distribution, we set the exact number of UEs
 percentageOfChannelsForGBS = 0.5
-uavServingLocationCase = 'L_REM' #  L_R  L_REM L_MM
+uavServingLocationCase = 'L_REM' # L_REM L_GP L_MM
 updateNumberOfIterations = 30 # REM/User association update period                                                
 numberOfEpisodes = 1
 numberOfGBSs = 1 # The number of GBSs in the simulation
@@ -48,7 +48,7 @@ apNoiseFigure = np.power(10, apNoiseFigure_dB / 10)
 uavNoiseFigure = apNoiseFigure
 uavNoiseFigure_dB = apNoiseFigure_dB
 
-numberPotentialServingLocations = 30
+numberPotentialServingLocations = 30 # N_{L}
 
 # REM-related parameters
 resolution = 12 #Number of points along each axis of the REM grid
@@ -61,6 +61,7 @@ nu = 1.55 # Smoothing parameter
 overallNumber = int((resolution**2)*numberOfPlanes)    
 remSamplingRate = updateNumberOfIterations / overallNumber # Number of iterations after 
                                                    # which, the simulation's status is updated
+                                                   # 410 is 10% of the resolution = 16 
 numberOfMeasurements = updateNumberOfIterations
 remUpdateIterations = proprietyCoefficient * updateNumberOfIterations
 
@@ -97,6 +98,7 @@ meanNumberOfUEs = numberOfUEs # or Poisson or Matern distribtion, we define the 
                     # the Poisson (Matern) distributed number of UEs will vary
 
 uavPathlossCase = 'U_2RM'#'U_AB' #'U_2R'#'U_DS'#
+
 
 # Generate the number of UEs and GBSs (for Poisson distributed points, only) 
 # and their locations for this movementIterationIdx
@@ -160,6 +162,7 @@ allUAVMeasurementPositions = np.zeros((numberOfUEs, numberOfREMUpdates, numberOf
 allReconstructedREMs = np.zeros((numberOfREMUpdates, overallNumber))
 allReconstructedREMsEachUE = np.zeros((numberOfUEs, numberOfREMUpdates, overallNumber))
 numberOfUEsAssociatedToUAV = np.zeros((numberOfEpisodes, numberOfUpdates))
+activeABS = np.zeros(numberOfMovementIterations)
 idsOfABSPositions = []
 idsOfUEsAssociatedToABS = []
 listOfUpdateIds = []
@@ -198,17 +201,13 @@ zPositionsMovingUEs = np.load('zPositionsMovingUEs_new_100k.npy')
 #     xPositionsMovingUEs.T, yPositionsMovingUEs.T, zPositionsMovingUEs.T
 # ]).T
 
-
 defaultScenario = False
 plotting = False
-
-activeABS = np.zeros(numberOfMovementIterations)
 
 # %%
 # Smulation
 startingTime = time()
 for episodeIdx in range(0, numberOfEpisodes):    
-    # episodeTimingStart = time()
     apOnlyCapacityOverall = []
     uavCapacityOverall = []    
     apOnlyInterferenceOverall = []
@@ -234,7 +233,8 @@ for episodeIdx in range(0, numberOfEpisodes):
     performanceMetrics_ = PerformanceMetricsCalculation(channelBandwidth)
     for movementIterationIdx in range(0, numberOfMovementIterations): 
         if( simulationUpdateIdx == 0 ):   
-            # Calculates the PathLoss for each UE to the GBS.
+            # Calculates the PathLoss for each UE to the GBS. The lowest loss
+            # will determine which GBS the UE will associate with (association scheme 1).
             # Once associated with a UE, change of this association will not be performed.               
             seed = len(xPositionsMovingUEs) + movementIterationIdx + episodeIdx + 25
             pathLossObject = PathLossCalculationFast_.PathLossCalculation(seed)
@@ -269,7 +269,7 @@ for episodeIdx in range(0, numberOfEpisodes):
             # have low SINR will be used by the UAV, rather than the GBS
             apListIdx = 0 # Denotes the GBS
 
-            # The GBS and UAV divide among themselves the set of channels 
+            # The GBS and UAV divide from the same set of channels 
             listOfUnoccupiedChannelsIDs = np.arange(0, int(numberOfChannels*percentageOfChannelsForGBS))
             # Perform allocation of the defined number of channels for all connection
             performChannelAllocation = ChannelAllocation(movementIterationIdx)
@@ -285,7 +285,7 @@ for episodeIdx in range(0, numberOfEpisodes):
             listsOfChannelAllocationsAllUEs.append(listOfChannelAllocationsUE_GBS)
 
             ########################################################################
-            # Perform UAV Measurements to update the REM
+
             seed = len(xPositionsMovingUEs) + movementIterationIdx + episodeIdx + 123
             # Set the UAV location for the measurement in the current iteration
             # by using information from the previous reconstructed REMs,  
@@ -294,12 +294,13 @@ for episodeIdx in range(0, numberOfEpisodes):
             
             # DEFAULT simulation (or the 1st numberOfMeasurements iterations) - 
             # the locations of UAV measurements are chosen at random
+            # measurementLocationsIndices = np.zeros((numberOfMeasurements), dtype=int)
             if( uavMeasurementsIdx == 0 and ((defaultScenario == False and counterOfUpdates < 1
                 ) or defaultScenario == True or uavServingLocationCase != 'L_REM') ):
                 measurementLocationsIndices = np.random.choice(np.arange(0, overallNumber),
-                                                size=numberOfMeasurements, replace=False)                                      
+                                                size=numberOfMeasurements, replace=False)                           
             # In subsequent iterations - Set the UAV location for the measurement in 
-            # the current iteration by using information from the previous reconstructed REMs         
+            # the current iteration by using information from the previous reconstructed REM     
             elif( uavMeasurementsIdx == 0 and (allReconstructedREMs.shape[0] > lastREMIdx )
                   and uavServingLocationCase == 'L_REM'):
                 uavAssociationsDone = False
@@ -350,167 +351,160 @@ for episodeIdx in range(0, numberOfEpisodes):
                     rng = np.random.default_rng((movementIterationIdx*ueIdx) + ueIdx)
                     # # This is the measurement noise
                     receivedUsefulSignalPowerAtABS[ueIdx] = currentNumberOfAllocatedChannels[ueIdx
-                    ] * uplinkPowerLevelOfUE * pathLossForUE_ABS[ueIdx] 
-                    
+                    ] * uplinkPowerLevelOfUE * pathLossForUE_ABS[ueIdx] #* np.power(10,
+                    #(rng.normal(0, 9, 1)[0])/10) #0, 9
             receivedUsefulSignalPowerAtABS = receivedUsefulSignalPowerAtABS[np.argsort(listsOfAssociatedUEsIds)[0]]
 
             # The measured power at the current point for the utilized bandwidth 
             # is obtained by the mean power over all UEs
             currentMeasurementIteration = movementIterationIdx % updateNumberOfIterations
             currentUAVMeasurements[:, currentMeasurementIteration] = receivedUsefulSignalPowerAtABS
-            ########################################################################                   
-            # Reconstruct REM after the measurements are gathered               
+            ########################################################################       
+            
+            # Reconstruct REM after the measurements are gathered 
             if( movementIterationIdx % updateNumberOfIterations == updateNumberOfIterations - 1 ):
                 simulationUpdateIdx = 1
                 currentSeed = movementIterationIdx + episodeIdx + 123
                 np.random.seed(currentSeed)
                 uavMeasurementsIdx = 0
 
-                uePositions3D = np.array([xPositionsMovingUEs[movementIterationIdx],
-                                        yPositionsMovingUEs[movementIterationIdx],
-                                        zPositionsMovingUEs[movementIterationIdx]]).T                
-                startingTime = time()                
-                if(uavServingLocationCase == 'L_REM' or uavServingLocationCase == 'L_MM'):
-                    # Reconstruct the 3D REM for each UE    
-                    startingTime_ = time()            
-                    for ueIdx in range(0, numberOfUEs):                                      
-                        # For Kriging:
-                        knownPoints = allPossibleMeasurementPoints[measurementLocationsIndices, :] 
-                        unknownIds = np.array([item for item in np.arange(0, allPossibleMeasurementPoints.shape[0
-                                                        ]) if item not in measurementLocationsIndices])
-                        unknownPoints = allPossibleMeasurementPoints[unknownIds, :]
-                        krigingReconstructedREM = np.zeros(allPossibleMeasurementPoints.shape[0])
-                        variogramDistances, variogramPowers, indices, pointEstimates,_,_ = estimateEmpiricalVariogram(
-                            KriPoints,
-                                                                                    knownPoints,
-                                                                                    currentUAVMeasurements[ueIdx, :], 
-                                                                                    unknownPoints[:,0],
-                                                                                    unknownPoints[:,1],
-                                                                                    unknownPoints[:, 2])
-                        nugget_, sill_, range_ = FindVariogramParameters(variogramPowers, variogramDistances)
-                        # Estimate the unknown points' power through Kriging
-                        estimatedPower, std, _, _ = KrigingInterpolation(
-                            currentUAVMeasurements[ueIdx],
-                                                                            variogramPowers,
-                                                                            nugget_, sill_, range_, variogramDistances,
-                                                                            knownPoints, 
-                                                                            indices, pointEstimates, nu, 123)
-                        reconstructedREM = np.zeros(allPossibleMeasurementPoints.shape[0])
-
-
-                        if(defaultScenario == True or uavServingLocationCase != 'L_REM'):   
-                            # In the DEFAULT simulation scenario, 
-                            # the REM is represented by the measurements themselves                                               
-                            reconstructedREM = currentUAVMeasurements[ueIdx, :]
-                        else:
-
-
-                            # for Kriging method
-                            reconstructedREM[unknownIds] = estimatedPower
-                            reconstructedREM[measurementLocationsIndices] = currentUAVMeasurements[ueIdx, :]
-                            estimationTime = time() - startingTime_
-                            # print("single rem reconstructed in ", estimationTime)
-                            allReconstructedREMsEachUE[ueIdx, idxOfRemUpdates, :] = reconstructedREM
-                            # The output is in dB so it is converted back to non-logarithmic numbers
-                    # Sum all REMs
-                    allReconstructedREMs[idxOfRemUpdates, :] = np.sum(allReconstructedREMsEachUE[:, 
-                                    idxOfRemUpdates, :], axis=0)
-                    idxOfRemUpdates += 1                
-
-                    print("ABS Location determined " + str(movementIterationIdx) +
-                        ' overall time in minutes: ' +  str((time() - startingTime)/60))                
-                    if(uavServingLocationCase == 'L_REM'): 
-                        # # REM-based UAV Location
-                        potentialServingLocationIds = np.argsort(allReconstructedREMs[
-                                                        idxOfRemUpdates, :])[:numberPotentialServingLocations]
-
-                        # # Calculate the downlink RSS and throughput for all UEs
-                        # # Measure RSS from the ABS to all UEs
-                        receivedUsefulSignalPowerAtUEs = np.zeros(numberOfUEs)
-                        sumThroughputs = np.zeros(potentialServingLocationIds.shape[0])
-                        for currentABSLocationIdx in range(0, potentialServingLocationIds.shape[0]):
-                            pathLossForUE_ABS = np.zeros(numberOfUEs)
-                            for ueIdx in range(0, numberOfUEs):    
-                                currentUAVPosition = allPossibleMeasurementPoints[
-                                                                potentialServingLocationIds[currentABSLocationIdx]]
-                                # Perform UAV measurements at the selected positions
-                                # Calculates the PathLoss for each UE to the UAV.
-                                pathLossObject = PathLossCalculationFast_.PathLossCalculation(seed)
-                                # The UAV-UE PL model are used here
-                                pathLossObject.pathLossUAV_GN(  currentUAVPosition[0],
-                                                                currentUAVPosition[1],
-                                                                currentUAVPosition[2],
-                                                                xPositionsMovingUEs[movementIterationIdx, ueIdx],
-                                                                yPositionsMovingUEs[movementIterationIdx, ueIdx],
-                                                                zPositionsMovingUEs[movementIterationIdx, ueIdx], 
-                                                                uavPathlossCase )
-                                pathLossForUE_ABS[ueIdx] = pathLossObject.pathLoss[0, :][0]
-                                
-                            # Collect the RSRP measurements at the UEs
-                            # Allocate the channels for each UE
-                            currentChannelsIDs = []
-                            for currentConnectionIDIdx in range(0, len(listsOfChannelAllocationsAllUEs[0])):
-                                # Calculate the Performance Metrics for the DL connection
-                                # The channel IDs which are allocated to the current connection
-                                currentChannelsIDsForGBS = listsOfChannelAllocationsAllUEs[0][currentConnectionIDIdx][1]
-                                currentChannelsIDs.append(currentChannelsIDsForGBS)
-                                currentNumberOfAllocatedChannels[listsOfChannelAllocationsAllUEs[0][
-                                                            currentConnectionIDIdx][0]] = len(currentChannelsIDsForGBS) 
-                            # Calculate the power measured by all UEs 
-                            # for their corresponding channels ABS-UE link
-                            for apListIdx in range(0, len(listsOfAssociatedGBSsIds)):
-                                for apIdx in range(0, len(listsOfAssociatedGBSsIds[apListIdx])):
-                                    ueIdx = listsOfAssociatedUEsIds[apListIdx][apIdx]
-                                    receivedUsefulSignalPowerAtUEs[ueIdx] = currentNumberOfAllocatedChannels[ueIdx
-                                    ] * downlinkPowerLevelOfGBSorUAV * pathLossForUE_ABS[ueIdx]
-                                    
-
-                            # Initialize the performanceMetrics object for the metrics' calculation
-                            performanceMetrics = PerformanceMetricsCalculation(channelBandwidth)
-                            # Calculate the Performance Metrics for DL (i.e. UEs' point of view)
-                            performanceMetrics.CalculateSINR(receivedUsefulSignalPowerAtUEs,
-                            currentNumberOfAllocatedChannels,
-                            receivedPowerSumForInterferingGBSsAtUE,
-                            noiseFigure = ueNoiseFigure )
-                            SINR_UE = performanceMetrics.SinrInDb     
-                            SINR = performanceMetrics.SINR
-                                                
-                            capacityUEs = overallNumberOfAllocatedChannels * channelBandwidth * np.log2(1 + SINR) / 1e6 # for Mbps
-                            sumThroughputs[currentABSLocationIdx] += np.sum(capacityUEs)
-                        uavServingLocationIdx = potentialServingLocationIds[np.argmax(sumThroughputs)]
+            
+            
+                # Reconstruct the 3D REM for each UE
+                startingTime_ = time()
+                for ueIdx in range(0, numberOfUEs):
                     
-                elif(uavServingLocationCase == 'L_MM'):
-                    # maxmin map baseline
-                    uavServingLocation,_ = radiomap_placement_maxmin_rate(
-                    uePositions3D,
-                    allPossibleMeasurementPoints,allReconstructedREMs[idxOfRemUpdates,
-                                                     :].reshape((12, 12, 4)),resolution)
-                    uavServingLocationIdx = np.where((
-                        allPossibleMeasurementPoints == uavServingLocation).all(axis=1))[0][0]
-                elif(uavServingLocationCase == 'L_GP'):
-                    # GP baseline
-                    uavServingLocationIdx = uav_positioning_with_gp(
-                    uePositions3D,
-                    allPossibleMeasurementPoints,LengthOfSimulatedRegion)
+                    
+                    # For Kriging:
+                    knownPoints = allPossibleMeasurementPoints[measurementLocationsIndices, :] 
+                    unknownIds = np.array([item for item in np.arange(0, allPossibleMeasurementPoints.shape[0
+                                                     ]) if item not in measurementLocationsIndices])
+                    unknownPoints = allPossibleMeasurementPoints[unknownIds, :]
+
+                    measurementsInDb = 10*np.log10(currentUAVMeasurements[ueIdx, :])
+                    normalizedMeasurements = 1/np.abs(measurementsInDb/measurementsInDb.max()) 
+                
+
+                    krigingReconstructedREM = np.zeros(allPossibleMeasurementPoints.shape[0])
+                    variogramDistances, variogramPowers, indices, pointEstimates,_,_ = estimateEmpiricalVariogram(
+                        KriPoints,
+                                                                                knownPoints,
+                                                                                normalizedMeasurements, 
+                                                                                unknownPoints[:,0],
+                                                                                unknownPoints[:,1],
+                                                                                unknownPoints[:, 2])
+                    nugget_, sill_, range_ = FindVariogramParameters(variogramPowers, variogramDistances)
+                    # Estimate the unknown points' power through Kriging
+                    estimatedPower, std, _, _ = KrigingInterpolation(
+                        normalizedMeasurements,
+                                                                        variogramPowers,
+                                                                        nugget_, sill_, range_, variogramDistances,
+                                                                        knownPoints, 
+                                                                        indices, pointEstimates, nu, 123)
+                    reconstructedREM = np.zeros(allPossibleMeasurementPoints.shape[0])
+
+
+                    if(defaultScenario == True or uavServingLocationCase != 'L_REM'):   
+                        # In the DEFAULT simulation scenario, 
+                        # the REM is represented by the measurements themselves                                               
+                        reconstructedREM = currentUAVMeasurements[ueIdx, :]
+                    else:
+
+                        # for Kriging method
+                        reconstructedREM[unknownIds] = estimatedPower
+                        reconstructedREM[measurementLocationsIndices] = normalizedMeasurements#currentUAVMeasurements[ueIdx, :]
+                        estimationTime = time() - startingTime_
+                        # print("single rem reconstructed in ", estimationTime)
+                        allReconstructedREMsEachUE[ueIdx, idxOfRemUpdates, :] = reconstructedREM
+                        # The output is in dB so it is converted back to non-logarithmic numbers
+                # Sum all REMs
+                allReconstructedREMs[idxOfRemUpdates, :] = np.sum(allReconstructedREMsEachUE[:, 
+                                idxOfRemUpdates, :], axis=0)
+                idxOfRemUpdates += 1                
+
+                print("ABS Location determined " + str(movementIterationIdx) +
+                    ' overall time in minutes: ' +  str((time() - startingTime)/60))                
+                if(uavServingLocationCase == 'L_REM'): 
+                    # # REM-based UAV Location
+                    potentialServingLocationIds = np.argsort(allReconstructedREMs[idxOfRemUpdates, :])[:numberPotentialServingLocations]
+
+                    # # Calculate the downlink RSS and throughput for all UEs
+                    # # Measure RSS from the ABS to all UEs
+                    receivedUsefulSignalPowerAtUEs = np.zeros(numberOfUEs)
+                    sumThroughputs = np.zeros(potentialServingLocationIds.shape[0])
+                    for currentABSLocationIdx in range(0, potentialServingLocationIds.shape[0]):
+                        pathLossForUE_ABS = np.zeros(numberOfUEs)
+                        for ueIdx in range(0, numberOfUEs):    
+                            currentUAVPosition = allPossibleMeasurementPoints[
+                                                            potentialServingLocationIds[currentABSLocationIdx]]
+                            # Perform UAV measurements at the selected positions
+                            # Calculates the PathLoss for each UE to the UAV. We need the PL from the UEs to
+                            # the UAV for each UE, so we can multiply it by the GBS's transmit power
+                            # and aggregate all of them to obtain the cumulative RSS of the GBS over all UEs
+                            # at each measurement position. BUT this is not what happens in the real world.
+                            # So, for it to make sense we need to measure from the GBS as it is the actual transmitter.
+                            pathLossObject = PathLossCalculationFast_.PathLossCalculation(seed)
+                            # The UAV-UE PL model are used here
+                            pathLossObject.pathLossUAV_GN(  currentUAVPosition[0],
+                                                            currentUAVPosition[1],
+                                                            currentUAVPosition[2],
+                                                            xPositionsMovingUEs[movementIterationIdx, ueIdx],
+                                                            yPositionsMovingUEs[movementIterationIdx, ueIdx],
+                                                            zPositionsMovingUEs[movementIterationIdx, ueIdx], 
+                                                            uavPathlossCase )
+                            pathLossForUE_ABS[ueIdx] = pathLossObject.pathLoss[0, :][0]
+                            
+                        # Collect the RSRP measurements at the UEs
+                        # Allocate the channels for each UE
+                        currentChannelsIDs = []
+                        for currentConnectionIDIdx in range(0, len(listsOfChannelAllocationsAllUEs[0])):
+                            # Calculate the Performance Metrics for the DL connection
+                            # The channel IDs which are allocated to the current connection
+                            currentChannelsIDsForGBS = listsOfChannelAllocationsAllUEs[0][currentConnectionIDIdx][1]
+                            currentChannelsIDs.append(currentChannelsIDsForGBS)
+                            currentNumberOfAllocatedChannels[listsOfChannelAllocationsAllUEs[0][
+                                                        currentConnectionIDIdx][0]] = len(currentChannelsIDsForGBS) 
+                        # Calculate the power measured by all UEs 
+                        # for their corresponding channels ABS-UE link
+                        for apListIdx in range(0, len(listsOfAssociatedGBSsIds)):
+                            for apIdx in range(0, len(listsOfAssociatedGBSsIds[apListIdx])):
+                                ueIdx = listsOfAssociatedUEsIds[apListIdx][apIdx]
+                                # rng = np.random.default_rng((movementIterationIdx*ueIdx) + ueIdx)
+                                # # This is the measurement noise
+                                receivedUsefulSignalPowerAtUEs[ueIdx] = currentNumberOfAllocatedChannels[ueIdx
+                                ] * downlinkPowerLevelOfGBSorUAV * pathLossForUE_ABS[ueIdx] #* np.power(10,
+                                #(rng.normal(0, 9, 1)[0])/10) #0, 9
+
+                        # Initialize the performanceMetrics object for the metrics' calculation
+                        performanceMetrics = PerformanceMetricsCalculation(channelBandwidth)
+                        # Calculate the Performance Metrics for DL (i.e. UEs' point of view)
+                        performanceMetrics.CalculateSINR(receivedUsefulSignalPowerAtUEs,#[listsOfSortedIDsForUEs], #[listOfAssociatedUEsIds],
+                        currentNumberOfAllocatedChannels,#[listsOfSortedIDsForUEs], #[listOfAssociatedUEsIds],
+                        receivedPowerSumForInterferingGBSsAtUE,#[listsOfSortedIDsForUEs],#[listOfAssociatedUEsIds],
+                        noiseFigure = ueNoiseFigure )
+                        SINR_UE = performanceMetrics.SinrInDb     
+                        SINR = performanceMetrics.SINR
+                                            # currentNumberOfAllocatedChannels[listOfAssociatedUEsIds]
+                        capacityUEs = overallNumberOfAllocatedChannels * channelBandwidth * np.log2(1 + SINR) / 1e6 # for Mbps
+                        sumThroughputs[currentABSLocationIdx] += np.sum(capacityUEs)
+                    uavServingLocationIdx = potentialServingLocationIds[np.argmax(sumThroughputs)]
+
 
                 elif(uavServingLocationCase == 'L_R'):
                     # Random Location for each association
-                    uavServingLocationIdx = np.random.choice(np.arange(0, reconstructedREM.shape[0]))                
-                
+                    uavServingLocationIdx = np.random.choice(np.arange(0, reconstructedREM.shape[0]))
+
                 # Find the nearest measurementLocationIdx (of the measurementLocationsIndices)
                 # to the idx of the lowest DL GBS_RSS, among the allPossibleMeasurementPoints
                 uavServingLocation = allPossibleMeasurementPoints[uavServingLocationIdx]
                 pathLossObject = PathLossCalculationFast_.PathLossCalculation(currentSeed)
                 
-                # Comment if the simulation is run for reference methods (i.e. 
-                # the UE associations are already recorded).
                 # Record the idx of the current ABS serving position
-                idsOfABSPositions.append(uavServingLocationIdx)
-
-                '....'
+                idsOfABSPositions.append(uavServingLocationIdx)             
+            
                 idsOfUEstoAssociateForUAV = np.where(capacityCurrentUE <= 5)[0] # in Mbps
                 if(len(idsOfUEstoAssociateForUAV) == 0):
-                    
+                    # idsOfPotentialUEs = np.array([np.argmin(receivedUsefulSignalPowerUEs_GBS)])
                     simulationUpdateIdx = 0
                     print('len(idsOfPotentialUEs) == 0, agrmin')
                 else:
@@ -555,7 +549,11 @@ for episodeIdx in range(0, numberOfEpisodes):
             # Comment if the simulation is run for reference methods (i.e. 
             # the UE associations are already recorded).
             numberOfUEsAssociatedToUAV[episodeIdx, counterOfUpdates] = len(idsOfUEstoAssociateForUAV)
+            # idsOfUEsAssociatedToABS.append(idsOfUEstoAssociateForUAV)
             listOfUpdateIds.append(movementIterationIdx)
+
+            # Debug    
+            # print(movementIterationIdx, idsOfUEstoAssociateForUAV)#, 10*np.log10(uavMeasurements))
 
             if(len(listsOfChannelAllocationsAllUEs) == 1):
                 idsOfGBSonly = np.append(idsOfGBSonly, counterOfUpdates)                              
@@ -620,7 +618,9 @@ for episodeIdx in range(0, numberOfEpisodes):
             if(len(listsOfChannelAllocationsAllUEs)>=2):
                 del listsOfChannelAllocationsAllUEs[1]                    
 
-            listsOfChannelAllocationsAllUEs.append(listOfChannelAllocationsUE_UAV)        
+            listsOfChannelAllocationsAllUEs.append(listOfChannelAllocationsUE_UAV)
+
+            ##############################################################            
 
             # Find the path loss from the UAV to the UEs
             pathLossObject.pathLossUAV_GN(  xCurrentPositionUAV,
@@ -690,8 +690,10 @@ for episodeIdx in range(0, numberOfEpisodes):
             for apIdx in range(0, len(listsOfAssociatedGBSsIds[apListIdx])):
                 ueIdx = sortedUEIDs[apIdx]
                 rng = np.random.default_rng((movementIterationIdx*ueIdx) + ueIdx)
-                receivedUsefulSignalPowerAtUE[ueIdx] = overallNumberOfAllocatedChannels[
-                    ueIdx] * downlinkPowerLevelOfGBSorUAV * pathLossBetweenUEandGBS_or_UAV[ueIdx] 
+                receivedUsefulSignalPowerAtUE[ueIdx] = overallNumberOfAllocatedChannels[ #overallNumberOfAllocatedChannels
+                    ueIdx] * downlinkPowerLevelOfGBSorUAV * pathLossBetweenUEandGBS_or_UAV[ueIdx] #* np.power(10,
+                     #(rng.normal(0, 9, 1)[0])/10) 
+                    # This is the measurement noise
                      
         # No interference case
         if( len(listsOfAssociatedUEsIds)>1 ):
@@ -706,13 +708,13 @@ for episodeIdx in range(0, numberOfEpisodes):
         # Initialize the performanceMetrics object for the metrics' calculation
         performanceMetrics = PerformanceMetricsCalculation(channelBandwidth)
         # Calculate the Performance Metrics for DL (i.e. UEs' point of view)
-        performanceMetrics.CalculateSINR(receivedUsefulSignalPowerAtUE,
-        overallNumberOfAllocatedChannels,
-        receivedPowerSumForInterferingGBSsAtUE,
+        performanceMetrics.CalculateSINR(receivedUsefulSignalPowerAtUE,#[listsOfSortedIDsForUEs], #[listOfAssociatedUEsIds],
+        overallNumberOfAllocatedChannels,#[listsOfSortedIDsForUEs], #[listOfAssociatedUEsIds],
+        receivedPowerSumForInterferingGBSsAtUE,#[listsOfSortedIDsForUEs],#[listOfAssociatedUEsIds],
         noiseFigure = ueNoiseFigure )
         SINR_UE = performanceMetrics.SinrInDb     
         SINR = performanceMetrics.SINR
-                            
+                            # currentNumberOfAllocatedChannels[listOfAssociatedUEsIds]
         capacityCurrentUE = overallNumberOfAllocatedChannels * channelBandwidth * np.log2(1 + SINR) / 1e6 # for Mbps
         totalCapacityPerUpdate += np.sum(capacityCurrentUE)
 
@@ -735,9 +737,12 @@ for episodeIdx in range(0, numberOfEpisodes):
             # print(movementIterationIdx, meanTotalCapacity[episodeIdx, counterOfUpdates])
             counterOfUpdates += 1          
         
+
             breakpoint = ''
-        # Debug 
+        # Debug                 
         # print(movementIterationIdx, np.sum(capacityCurrentUE))
+        # print(movementIterationIdx, SINR_UE, listOfAssociatedUEsIds, totalCapacityPerUpdate)
+
         concludingCalculationsEndingTime = time()
 
 
@@ -752,24 +757,21 @@ for episodeIdx in range(0, numberOfEpisodes):
     apOnlyInterferenceOverall.append(apOnlyInterference)
     uavInterferenceOverall.append(uavInterference)    
 
-    variablesString = str(proprietyCoefficient) + '_'+ uavServingLocationCase + '_' + str(resolution) + '_' + str(numberOfUEs) + '_' + str(int(remSamplingRate*100)) + '_' + str(int(percentageOfChannelsForGBS*100)) +  '_' + str(int(numberOfMovementIterations/1000)) + 'k'
-    if(uavServingLocationCase == 'L_REM'):
-        variablesString += '_' + str(numberPotentialServingLocations) 
+    variablesString = 'norm_'+str(proprietyCoefficient) + '_'+ uavServingLocationCase + '_' + str(resolution) + '_' + str(numberOfUEs) + '_' + str(int(remSamplingRate*100)) + '_' + str(int(percentageOfChannelsForGBS*100)) +  '_' + str(int(numberOfMovementIterations/1000))
 
     endingTimeOverall = time()
     print('overall time in minutes: ' + str((endingTimeOverall - startingTime)/60))
-    
-    np.save(str('Results/apOnlyCapacityOverall_' + variablesString +'.npy'), apOnlyCapacityOverall)
-    np.save(str('Results/uavCapacityOverall_'+ variablesString +'.npy'), uavCapacityOverall)
-    np.save(str('Results/totalCapacity_'+ variablesString +'.npy'), meanTotalCapacity)
-    np.save(str('Results/numberOfUEsAssociatedToUAV_'+ variablesString +'.npy'), numberOfUEsAssociatedToUAV)
-    np.save(str('Results/coordinatesOfUEsAssociatedToABS_'+ variablesString +'.npy'),
+    np.save(str('Results/apOnlyCapacityOverall_' + variablesString +'k.npy'), apOnlyCapacityOverall)
+    np.save(str('Results/uavCapacityOverall_'+ variablesString +'k.npy'), uavCapacityOverall)
+    np.save(str('Results/totalCapacity_'+ variablesString +'k.npy'), meanTotalCapacity)
+    np.save(str('Results/numberOfUEsAssociatedToUAV_'+ variablesString +'k.npy'), numberOfUEsAssociatedToUAV)
+    np.save(str('Results/coordinatesOfUEsAssociatedToABS_'+ variablesString +'k.npy'),
      np.array(idsOfUEsAssociatedToABS, dtype="object"))
-    np.save(str('Results/listOfUpdateIds_'+ variablesString +'.npy'), listOfUpdateIds)
-    np.save(str('Results/idsOfABSPositions_'+ variablesString +'.npy'), np.array(idsOfABSPositions))
-    np.save(str('Results/activeABS_'+ variablesString +'.npy'), activeABS)
-    np.save(str('Results/allReconstructedREMs_'+ variablesString +'.npy'), allReconstructedREMs)
-    print('') 
+    np.save(str('Results/listOfUpdateIds_'+ variablesString +'k.npy'), listOfUpdateIds)
+    np.save(str('Results/idsOfABSPositions_'+ variablesString +'k.npy'), np.array(idsOfABSPositions))
+    np.save(str('Results/activeABS_'+ variablesString +'k.npy'), activeABS)
+    np.save(str('Results/allReconstructedREMs_'+ variablesString +'k.npy'), allReconstructedREMs)
+    print('')
 
     # Get the CDF for analysis    
     count, bins_count = np.histogram(uavCapacityOverall, bins=10) 
@@ -777,7 +779,6 @@ for episodeIdx in range(0, numberOfEpisodes):
     cdf = np.cumsum(pdf) # using numpy np.cumsum to calculate the CDF 
     plt.plot(bins_count[1:], cdf, label="CDF") 
     
-
 
 # %%
 print('')
