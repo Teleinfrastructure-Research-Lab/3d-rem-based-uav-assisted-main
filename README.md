@@ -9,19 +9,14 @@ The code was run on Python 3.9. It requires installing the Path Loss modes from 
 
 For more information, see the paper and the cited references. The paper was accepted and presented at 2025 IEEE GLOBECOM Workshops. It is not yet published but may be accessed on Zenodo. If you use this code, we kindly request that you reference the publication:
 ```bibtex
-@misc{ivanov20263d,
-  author       = {Ivanov, Antoni and
-                  Тonchev, Кrasimir and
-                  Vlahov, Atanas and
-                  Poulkov, Vladimir and
-                  Manolova, Agata},
-  title        = {3D REM-based Positioning Procedure for UAV-
-                   Assisted Het-Nets
-                  },
-  month        = feb,
-  year         = 2026,
-  publisher    = {Zenodo},
-  doi          = {10.5281/zenodo.18762008},
-  url          = {https://doi.org/10.5281/zenodo.18762008},
+@INPROCEEDINGS{11591168,
+  author={Ivanov, Antoni and Tonchev, Krasimir and Vlahov, Atanas and Poulkov, Vladimir and Manolova, Agata},
+  booktitle={2025 IEEE Globecom Workshops (GC Wkshps)}, 
+  title={3D REM-based Positioning Procedure for UAV-Assisted Het-Nets}, 
+  year={2025},
+  volume={},
+  number={},
+  pages={2320-2326},
+  doi={10.1109/GCWkshps68340.2025.11591168}
 }
 ```
