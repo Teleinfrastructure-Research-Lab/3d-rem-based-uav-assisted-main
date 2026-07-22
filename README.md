@@ -1,5 +1,5 @@
 # 3drem_based_uav_assisted_main
-This code simulates a UAV-assisted heterogeneous network used for validating a 3D Radio Environment Map based positioning procedure for the UAV base station.
+This code simulates a UAV-assisted heterogeneous network used for validating a 3D Radio Environment Map based positioning procedure for the UAV base station (2025 GLOBECOM Workshops paper entitled "3D REM-based Positioning Procedure for UAV-Assisted Het-Nets").
 
   - The simulation runs through and provides SNR and bitrates for every UE at a specific instance. Some UEs are served by the stationary ground base station, while others are associated to the drone base station. It is assumed throughout the simulation that at least one UE is served by the ground base station.
   
